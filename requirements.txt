@@ -2,3 +2,15 @@ fastapi
 uvicorn[standard]
 httpx
 openai
+python-multipart
+langchain
+langchain-community
+langchain-chroma
+langchain-huggingface
+sentence-transformers
+pypdf
+chromadb
+langchain-text-splitters
+
+
+# pip install -r requirements.txt
