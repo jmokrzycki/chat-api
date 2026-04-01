@@ -1,41 +1,38 @@
 import json
 import os
-import shutil
-from typing import cast, List, Union
+from typing import AsyncGenerator
 from fastapi import FastAPI, UploadFile, File, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import StreamingResponse
-from openai import AsyncOpenAI, AsyncStream
-from openai.types.chat import (
-    ChatCompletionChunk,
-    ChatCompletionSystemMessageParam,
-    ChatCompletionUserMessageParam
-)
 
 from langchain_text_splitters import RecursiveCharacterTextSplitter
 from langchain_community.document_loaders import PyPDFLoader, TextLoader
 from langchain_chroma import Chroma
 from langchain_huggingface import HuggingFaceEmbeddings
+from langchain_openai import ChatOpenAI
+from langchain_core.prompts import ChatPromptTemplate
+from langchain_core.runnables import RunnablePassthrough, RunnableLambda, RunnableParallel
+from langchain_core.output_parsers import StrOutputParser
 
 app = FastAPI()
 
 app.add_middleware(
-    CORSMiddleware,
+    CORSMiddleware, # type: ignore
     allow_origins=["http://localhost:5173"],
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
 )
 
-client = AsyncOpenAI(
-    base_url="http://localhost:11434/v1",
-    api_key="ollama"
-)
-
-Message = Union[ChatCompletionSystemMessageParam, ChatCompletionUserMessageParam]
-
 UPLOAD_DIR = "./uploaded_docs"
 os.makedirs(UPLOAD_DIR, exist_ok=True)
+
+llm = ChatOpenAI(
+    base_url="http://localhost:11434/v1",
+    api_key="ollama",
+    model="speakleash/bielik-11b-v3.0-instruct:Q4_K_M",
+    streaming=True
+)
 
 embedding_model_name = "sentence-transformers/paraphrase-multilingual-MiniLM-L12-v2"
 embeddings = HuggingFaceEmbeddings(model_name=embedding_model_name)
@@ -46,16 +43,22 @@ vector_store = Chroma(
     persist_directory="./chroma_db"
 )
 
+retriever = vector_store.as_retriever(search_kwargs={"k": 3})
+
 @app.post("/api/upload")
 async def upload_document(file: UploadFile = File(...)):
     try:
-        file_path = os.path.join(UPLOAD_DIR, file.filename)
+        filename = file.filename or "unknown_file"
+        file_path = os.path.join(UPLOAD_DIR, filename)
+
         with open(file_path, "wb") as buffer:
-            shutil.copyfileobj(file.file, buffer)  # type: ignore
-        if file.filename.lower().endswith(".pdf"):
+            while content := await file.read(1024 * 1024):
+                buffer.write(content)
+
+        if filename.lower().endswith(".pdf"):
             loader = PyPDFLoader(file_path)
             docs = loader.load()
-        elif file.filename.lower().endswith(".txt"):
+        elif filename.lower().endswith(".txt"):
             loader = TextLoader(file_path, encoding='utf-8')
             docs = loader.load()
         else:
@@ -67,62 +70,51 @@ async def upload_document(file: UploadFile = File(...)):
         vector_store.add_documents(splits)
         os.remove(file_path)
 
-        return {"message": f"Plik {file.filename} został pomyślnie przetworzony i dodany do bazy wiedzy."}
+        return {"message": f"Plik {filename} został pomyślnie przetworzony i dodany do bazy wiedzy."}
 
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Błąd podczas przetwarzania pliku: {str(e)}")
 
+def format_docs(docs):
+    return "\n\n---\n\n".join(doc.page_content for doc in docs)
 
 @app.post("/api/chat")
 async def ask_bielik(data: dict):
     user_prompt = str(data.get("prompt", "Brak pytania"))
+    template = """Jesteś inteligentnym i pomocnym asystentem AI.
+Został Ci dostarczony poniższy KONTEKST w postaci fragmentów dokumentów.
+Odpowiedz na pytanie bazując na tym kontekście.
+Jeśli nie potrafisz znaleźć odpowiedzi w kontekście, powiedz o tym, a następnie odpowiedz zgodnie z własną wiedzą.
 
-    context = ""
-    try:
-        results = vector_store.similarity_search(user_prompt, k=3)
-        if results:
-            context = "\n\n---\n\n".join([doc.page_content for doc in results])
-    except Exception as e:
-        print(f"Błąd przeszukiwania bazy wektorowej: {e}")
+KONTEKST:
+{context}
 
-    messages: List[Message]
+PYTANIE UŻYTKOWNIKA:
+{question}
+"""
+    prompt = ChatPromptTemplate.from_template(template)
 
-    if context.strip():
-        system_message = (
-            "Jesteś inteligentnym i pomocnym asystentem AI. "
-            "Został Ci dostarczony poniższy KONTEKST w postaci fragmentów dokumentów wgranych przez użytkownika. "
-            "Odpowiedz na pytanie bazując na tym kontekście. "
-            "Jeśli nie potrafisz znaleźć odpowiedzi w kontekście, powiedz o tym, a następnie odpowiedz zgodnie z własną wiedzą.\n\n"
-            f"KONTEKST:\n{context}\n"
-        )
-
-        messages = [
-            ChatCompletionSystemMessageParam(role="system", content=system_message),
-            ChatCompletionUserMessageParam(role="user", content=user_prompt)
-        ]
-    else:
-        messages = [ChatCompletionUserMessageParam(role="user", content=user_prompt)]
-
-    async def proxy_stream():
-        try:
-            response = await client.chat.completions.create(
-                model="speakleash/bielik-11b-v3.0-instruct:Q4_K_M",
-                messages=messages,
-                stream=True
+    rag_chain = (
+            RunnableParallel(
+                context=retriever | RunnableLambda(format_docs),
+                question=RunnablePassthrough()
             )
+            | prompt
+            | llm
+            | StrOutputParser()
+    )
 
-            stream = cast(AsyncStream[ChatCompletionChunk], cast(object, response))
-
-            async for chunk in stream:
-                if chunk.choices and chunk.choices[0].delta.content is not None:
-                    content = chunk.choices[0].delta.content
-                    yield json.dumps({"response": content}) + "\n"
-
+    async def generate_response() -> AsyncGenerator[str, None]:
+        try:
+            async for chunk in rag_chain.astream(user_prompt):
+                if chunk:
+                    yield json.dumps({"response": chunk}) + "\n"
         except Exception as e:
-            yield json.dumps({"response": f"\n[Błąd połączenia: {str(e)}]"}) + "\n"
+            print(f"Błąd podczas generowania: {e}")
+            yield json.dumps({"response": f"\n[Błąd przetwarzania: {str(e)}]"}) + "\n"
 
     return StreamingResponse(
-        proxy_stream(),
+        generate_response(),
         media_type="application/x-ndjson",
         headers={
             "Cache-Control": "no-cache",
