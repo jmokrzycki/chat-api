@@ -75,6 +75,21 @@ async def upload_document(file: UploadFile = File(...)):
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Błąd podczas przetwarzania pliku: {str(e)}")
 
+
+@app.post("/api/reset")
+async def reset_rag():
+    try:
+        data = vector_store.get()
+        ids = data.get("ids", [])
+
+        if ids:
+            vector_store.delete(ids=ids)
+
+        return {"message": "Baza wiedzy została pomyślnie wyczyszczona."}
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Błąd podczas czyszczenia bazy: {str(e)}")
+
+
 def format_docs(docs):
     return "\n\n---\n\n".join(doc.page_content for doc in docs)
 
