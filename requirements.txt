@@ -11,6 +11,6 @@ chromadb
 langchain-text-splitters
 langchain-openai
 langchain-core
-
+pydantic
 
 # pip install -r requirements.txt

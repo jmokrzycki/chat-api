@@ -1,11 +1,16 @@
 import os
 from fastapi import APIRouter, UploadFile, File, HTTPException
 from fastapi.responses import StreamingResponse
+from pydantic import BaseModel
 
 from core.config import UPLOAD_DIR
 from core.rag import process_and_add_document, clear_vector_store, generate_chat_response
+from core.settings import get_saved_template, save_template
 
 router = APIRouter(prefix="/api")
+
+class TemplateData(BaseModel):
+    template: str
 
 @router.post("/upload")
 async def upload_document(file: UploadFile = File(...)):
@@ -33,6 +38,20 @@ async def reset_rag():
         return {"message": "Baza wiedzy została pomyślnie wyczyszczona."}
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Błąd podczas czyszczenia bazy: {str(e)}")
+
+
+@router.get("/template")
+async def get_template_route():
+    return {"template": get_saved_template()}
+
+
+@router.post("/template")
+async def save_template_route(data: TemplateData):
+    try:
+        save_template(data.template)
+        return {"message": "Szablon został zapisany pomyślnie."}
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Błąd zapisu: {str(e)}")
 
 
 @router.post("/chat")

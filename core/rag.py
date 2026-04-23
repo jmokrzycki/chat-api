@@ -15,6 +15,7 @@ from core.config import (
     UPLOAD_DIR, CHROMA_DIR, OLLAMA_BASE_URL,
     OLLAMA_API_KEY, MODEL_NAME, EMBEDDING_MODEL
 )
+from core.settings import get_saved_template
 
 llm = ChatOpenAI(
     base_url=OLLAMA_BASE_URL,
@@ -61,18 +62,7 @@ def format_docs(docs):
     return "\n\n---\n\n".join(doc.page_content for doc in docs)
 
 async def generate_chat_response(user_prompt: str, custom_template: str) -> AsyncGenerator[str, None]:
-    default_template = """Jesteś inteligentnym i pomocnym asystentem AI.
-Został Ci dostarczony poniższy KONTEKST w postaci fragmentów dokumentów.
-Odpowiedz na pytanie bazując na tym kontekście.
-Jeśli nie potrafisz znaleźć odpowiedzi w kontekście, powiedz o tym, a następnie odpowiedz zgodnie z własną wiedzą.
-
-KONTEKST:
-{context}
-
-PYTANIE UŻYTKOWNIKA:
-{question}
-"""
-
+    default_template = get_saved_template()
     template_str = custom_template.strip() if custom_template.strip() else default_template
 
     if "{context}" not in template_str:
