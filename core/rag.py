@@ -1,6 +1,7 @@
 import json
 import os
 from typing import AsyncGenerator
+import asyncio
 
 from langchain_text_splitters import RecursiveCharacterTextSplitter
 from langchain_community.document_loaders import PyPDFLoader, TextLoader
@@ -86,9 +87,12 @@ async def generate_chat_response(user_prompt: str, custom_template: str) -> Asyn
         async for chunk in rag_chain.astream(user_prompt):
             if chunk:
                 yield json.dumps({"response": chunk}) + "\n"
+    except asyncio.CancelledError:
+        print("Generowanie przerwane przez użytkownika.")
     except Exception as e:
         print(f"Błąd podczas generowania: {e}")
         yield json.dumps({"response": f"\n[Błąd przetwarzania: {str(e)}]"}) + "\n"
+
 
 def delete_document_from_vector_store(filename: str) -> None:
     data = vector_store.get()
