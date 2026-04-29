@@ -89,3 +89,20 @@ async def generate_chat_response(user_prompt: str, custom_template: str) -> Asyn
     except Exception as e:
         print(f"Błąd podczas generowania: {e}")
         yield json.dumps({"response": f"\n[Błąd przetwarzania: {str(e)}]"}) + "\n"
+
+def delete_document_from_vector_store(filename: str) -> None:
+    data = vector_store.get()
+    ids = data.get("ids", [])
+    metadatas = data.get("metadatas", [])
+
+    if not ids or not metadatas:
+        return
+
+    ids_to_delete = []
+    for i, metadata in enumerate(metadatas):
+        source = str(metadata.get("source", ""))
+        if source.replace('\\', '/').endswith(filename):
+            ids_to_delete.append(ids[i])
+
+    if ids_to_delete:
+        vector_store.delete(ids=ids_to_delete)
