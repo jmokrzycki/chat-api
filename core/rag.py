@@ -1,6 +1,6 @@
 import json
 import os
-from typing import AsyncGenerator
+from typing import AsyncGenerator, List, Dict
 import asyncio
 
 from langchain_text_splitters import RecursiveCharacterTextSplitter
@@ -9,14 +9,12 @@ from langchain_chroma import Chroma
 from langchain_huggingface import HuggingFaceEmbeddings
 from langchain_openai import ChatOpenAI
 from langchain_core.prompts import ChatPromptTemplate
-from langchain_core.runnables import RunnablePassthrough, RunnableLambda, RunnableParallel
 from langchain_core.output_parsers import StrOutputParser
 
 from core.config import (
     UPLOAD_DIR, CHROMA_DIR, OLLAMA_BASE_URL,
     OLLAMA_API_KEY, MODEL_NAME, EMBEDDING_MODEL
 )
-from core.settings import get_saved_template
 
 llm = ChatOpenAI(
     base_url=OLLAMA_BASE_URL,
@@ -62,29 +60,60 @@ def clear_vector_store() -> None:
 def format_docs(docs):
     return "\n\n---\n\n".join(doc.page_content for doc in docs)
 
-async def generate_chat_response(user_prompt: str, custom_template: str) -> AsyncGenerator[str, None]:
-    default_template = get_saved_template()
-    template_str = custom_template.strip() if custom_template.strip() else default_template
+def get_history_text(chat_history: List[Dict[str, str]]) -> str:
+    """Konwertuje listę słowników historii na tekst."""
+    if not chat_history:
+        return ""
+    return "\n".join([f"{'UŻYTKOWNIK' if msg['sender'] == 'user' else 'ASYSTENT'}: {msg['text']}" for msg in chat_history])
+
+async def rephrase_question(user_prompt: str, chat_history: List[Dict[str, str]], custom_rephrase: str) -> str:
+    """Tworzy samodzielne pytanie na podstawie historii czatu TYLKO dla bazy wektorowej."""
+    if not chat_history:
+        return user_prompt
+
+    history_text = get_history_text(chat_history)
+
+    prompt = ChatPromptTemplate.from_template(custom_rephrase)
+    chain = prompt | llm | StrOutputParser()
+
+    try:
+        standalone_q = await chain.ainvoke({"chat_history": history_text, "question": user_prompt})
+        print(f"--- Oryginalne: {user_prompt} ---")
+        print(f"--- Rephrased (do bazy): {standalone_q.strip()} ---")
+        return standalone_q.strip()
+    except Exception as e:
+        print(f"Błąd re-phrasingu: {e}")
+        return user_prompt
+
+async def generate_chat_response(user_prompt: str, custom_template: str, custom_rephrase: str, chat_history: List[Dict[str, str]]) -> AsyncGenerator[str, None]:
+
+    history_text = get_history_text(chat_history)
+
+    search_query = await rephrase_question(user_prompt, chat_history, custom_rephrase)
+
+    retrieved_docs = await retriever.ainvoke(search_query)
+    context_text = format_docs(retrieved_docs)
+
+    template_str = custom_template.strip()
 
     if "{context}" not in template_str:
-        template_str += "\n\nKONTEKST:\n{context}"
+        template_str += "\n\nKONTEKST Z DOKUMENTÓW:\n{context}"
     if "{question}" not in template_str:
         template_str += "\n\nPYTANIE UŻYTKOWNIKA:\n{question}"
 
+    if chat_history and "{chat_history}" not in template_str:
+        template_str = template_str.replace("{question}", "HISTORIA ROZMOWY:\n{chat_history}\n\nPYTANIE UŻYTKOWNIKA:\n{question}")
+
     prompt = ChatPromptTemplate.from_template(template_str)
 
-    rag_chain = (
-            RunnableParallel(
-                context=retriever | RunnableLambda(format_docs),
-                question=RunnablePassthrough()
-            )
-            | prompt
-            | llm
-            | StrOutputParser()
-    )
+    chain = prompt | llm | StrOutputParser()
 
     try:
-        async for chunk in rag_chain.astream(user_prompt):
+        async for chunk in chain.astream({
+            "context": context_text,
+            "question": user_prompt,
+            "chat_history": history_text
+        }):
             if chunk:
                 yield json.dumps({"response": chunk}) + "\n"
     except asyncio.CancelledError:
@@ -92,7 +121,6 @@ async def generate_chat_response(user_prompt: str, custom_template: str) -> Asyn
     except Exception as e:
         print(f"Błąd podczas generowania: {e}")
         yield json.dumps({"response": f"\n[Błąd przetwarzania: {str(e)}]"}) + "\n"
-
 
 def delete_document_from_vector_store(filename: str) -> None:
     data = vector_store.get()

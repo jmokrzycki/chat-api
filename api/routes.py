@@ -1,5 +1,5 @@
 import os
-from typing import List
+from typing import List, Dict
 from fastapi import APIRouter, UploadFile, File, HTTPException
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel
@@ -8,17 +8,26 @@ from core.config import UPLOAD_DIR
 from core.rag import (process_and_add_document, clear_vector_store, generate_chat_response,
                       delete_document_from_vector_store)
 from core.settings import (
-    get_saved_template, save_template,
+    get_settings_data, save_settings_data,
     add_trained_files_to_list, get_trained_files_list, clear_trained_files_list, remove_trained_file_from_list
 )
 
 router = APIRouter(prefix="/api")
 
-class TemplateData(BaseModel):
+class SettingsData(BaseModel):
     template: str
+    rephrase_template: str
+    history_limit: int
+    memory_enabled: bool
 
 class TrainData(BaseModel):
     filenames: List[str]
+
+class ChatRequest(BaseModel):
+    prompt: str
+    template: str
+    rephrase_template: str
+    history: List[Dict[str, str]]
 
 @router.post("/files")
 async def upload_file_only(file: UploadFile = File(...)):
@@ -96,25 +105,27 @@ async def reset_rag():
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Błąd podczas czyszczenia bazy: {str(e)}")
 
-@router.get("/template")
-async def get_template_route():
-    return {"template": get_saved_template()}
+@router.get("/settings")
+async def get_settings_route():
+    return get_settings_data()
 
-@router.post("/template")
-async def save_template_route(data: TemplateData):
+@router.post("/settings")
+async def save_settings_route(data: SettingsData):
     try:
-        save_template(data.template)
-        return {"message": "Szablon został zapisany pomyślnie."}
+        save_settings_data(data.template, data.rephrase_template, data.history_limit, data.memory_enabled)
+        return {"message": "Ustawienia zostały zapisane pomyślnie."}
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Błąd zapisu: {str(e)}")
 
 @router.post("/chat")
-async def ask_bielik(data: dict):
-    user_prompt = str(data.get("prompt", "Brak pytania"))
-    custom_template = str(data.get("template", ""))
-
+async def ask_bielik(data: ChatRequest):
     return StreamingResponse(
-        generate_chat_response(user_prompt, custom_template),
+        generate_chat_response(
+            data.prompt,
+            data.template,
+            data.rephrase_template,
+            data.history
+        ),
         media_type="application/x-ndjson",
         headers={
             "Cache-Control": "no-cache",
