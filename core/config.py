@@ -1,7 +1,7 @@
 import os
 
-UPLOAD_DIR = "./uploaded_docs"
-CHROMA_DIR = "./chroma_db"
+UPLOAD_DIR = "./data/uploaded_docs"
+CHROMA_DIR = "./data/chroma_db"
 
 OLLAMA_BASE_URL = "http://localhost:11434/v1"
 OLLAMA_API_KEY = "ollama"

@@ -1,6 +1,6 @@
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
-from api.routes import router
+from api.routers import chat, settings, documents
 
 app = FastAPI(title="Bielik RAG API")
 
@@ -12,7 +12,9 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-app.include_router(router)
+app.include_router(chat.router, prefix="/api")
+app.include_router(documents.router, prefix="/api")
+app.include_router(settings.router, prefix="/api")
 
 if __name__ == "__main__":
     import uvicorn

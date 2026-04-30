@@ -1,7 +1,10 @@
 import json
 import os
 
-SETTINGS_FILE = "settings.json"
+DATA_DIR = "./data"
+SETTINGS_FILE = os.path.join(DATA_DIR, "settings.json")
+
+os.makedirs(DATA_DIR, exist_ok=True)
 
 DEFAULT_TEMPLATE = """Jesteś inteligentnym i pomocnym asystentem AI. Poniżej znajduje się historia Twojej rozmowy z Użytkownikiem.
 Twoim zadaniem jest odpowiedzieć na najnowsze PYTANIE UŻYTKOWNIKA bazując na podanym KONTEKŚCIE z dokumentów oraz HISTORII ROZMOWY.
