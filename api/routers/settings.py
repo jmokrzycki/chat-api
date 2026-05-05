@@ -1,7 +1,7 @@
 from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel
 
-from core.settings import get_settings_data, save_settings_data
+from core.settings import get_settings_data, save_settings_data, get_default_settings_data
 
 router = APIRouter(tags=["Settings"])
 
@@ -14,6 +14,10 @@ class SettingsData(BaseModel):
 @router.get("/settings")
 async def get_settings_route():
     return get_settings_data()
+
+@router.get("/settings/defaults")
+async def get_default_settings_route():
+    return get_default_settings_data()
 
 @router.post("/settings")
 async def save_settings_route(data: SettingsData):

@@ -73,39 +73,44 @@ async def rephrase_question(user_prompt: str, chat_history: List[Dict[str, str]]
 
     history_text = get_history_text(chat_history)
 
-    prompt = ChatPromptTemplate.from_template(custom_rephrase)
+    rephrase_str = custom_rephrase.strip()
+    rephrase_str += "\n\nHISTORIA ROZMOWY:\n{chat_history}"
+    rephrase_str += "\n\nNAJNOWSZE PYTANIE:\n{question}\n\nSAMODZIELNE ZAPYTANIE DO BAZY DANYCH:"
+
+    prompt = ChatPromptTemplate.from_template(rephrase_str)
     chain = prompt | llm | StrOutputParser()
 
     try:
         standalone_q = await chain.ainvoke({"chat_history": history_text, "question": user_prompt})
+        clean_q = standalone_q.strip().strip('"').strip("'")
+
         print(f"--- Oryginalne: {user_prompt} ---")
-        print(f"--- Rephrased (do bazy): {standalone_q.strip()} ---")
-        return standalone_q.strip()
+        print(f"--- Rephrased (do bazy): {clean_q} ---")
+
+        return clean_q
     except Exception as e:
         print(f"Błąd re-phrasingu: {e}")
         return user_prompt
 
 async def generate_chat_response(user_prompt: str, custom_template: str, custom_rephrase: str, chat_history: List[Dict[str, str]]) -> AsyncGenerator[str, None]:
-
     history_text = get_history_text(chat_history)
-
     search_query = await rephrase_question(user_prompt, chat_history, custom_rephrase)
-
     retrieved_docs = await retriever.ainvoke(search_query)
-    context_text = format_docs(retrieved_docs)
 
     template_str = custom_template.strip()
 
-    if "{context}" not in template_str:
-        template_str += "\n\nKONTEKST Z DOKUMENTÓW:\n{context}"
-    if "{question}" not in template_str:
-        template_str += "\n\nPYTANIE UŻYTKOWNIKA:\n{question}"
+    if chat_history:
+        template_str += "\n\nHISTORIA ROZMOWY:\n{chat_history}"
 
-    if chat_history and "{chat_history}" not in template_str:
-        template_str = template_str.replace("{question}", "HISTORIA ROZMOWY:\n{chat_history}\n\nPYTANIE UŻYTKOWNIKA:\n{question}")
+    if retrieved_docs:
+        context_text = format_docs(retrieved_docs)
+        template_str += "\n\nKONTEKST Z DOKUMENTÓW:\n{context}"
+    else:
+        context_text = ""
+
+    template_str += "\n\nUŻYTKOWNIK:\n{question}\n\nASYSTENT:"
 
     prompt = ChatPromptTemplate.from_template(template_str)
-
     chain = prompt | llm | StrOutputParser()
 
     try:

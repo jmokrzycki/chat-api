@@ -6,41 +6,23 @@ SETTINGS_FILE = os.path.join(DATA_DIR, "settings.json")
 
 os.makedirs(DATA_DIR, exist_ok=True)
 
-DEFAULT_TEMPLATE = """Jesteś inteligentnym i pomocnym asystentem AI. Poniżej znajduje się historia Twojej rozmowy z Użytkownikiem.
-Twoim zadaniem jest odpowiedzieć na najnowsze PYTANIE UŻYTKOWNIKA bazując na podanym KONTEKŚCIE z dokumentów oraz HISTORII ROZMOWY.
+DEFAULT_TEMPLATE = """Jesteś inteligentnym i pomocnym asystentem AI.
+Twoim zadaniem jest udzielanie jasnych, merytorycznych i pomocnych odpowiedzi na pytania Użytkownika.
 
 ZASADY:
 1. Pamiętaj, kim jesteś (Asystentem) i z kim rozmawiasz (Użytkownik). Nie przejmuj tożsamości Użytkownika.
-2. Jeśli kontekst z dokumentów jest pusty, oprzyj się na historii rozmowy.
-3. Odpowiadaj zawsze w języku polskim, zwięźle i naturalnie.
+2. Odpowiadaj zawsze w języku polskim, zwięźle i naturalnie.
+"""
 
-HISTORIA ROZMOWY (Może być pusta):
-{chat_history}
-
-KONTEKST Z DOKUMENTÓW:
-{context}
-
-PYTANIE UŻYTKOWNIKA:
-{question}"""
-
-DEFAULT_REPHRASE_TEMPLATE = """Jesteś ekspertem od NLP. Twoim zadaniem jest stworzenie JEDNEGO, samodzielnego zapytania wyszukiwania (Standalone Question).
-Przeanalizuj HISTORIĘ ROZMOWY oraz NAJNOWSZE PYTANIE.
-
-Jeśli najnowsze pytanie nawiązuje do historii (np. ma zaimki "to", "on" lub odnosi się do imienia Użytkownika, np. "jak mam na imię?"), zamień je na obiektywne zapytanie (np. "Jakie jest imię użytkownika?").
+DEFAULT_REPHRASE_TEMPLATE = """Twoim jedynym zadaniem jest przekształcenie NAJNOWSZEGO PYTANIA UŻYTKOWNIKA w jedno, samodzielne zapytanie do wyszukiwarki dokumentów (RAG).
+Użyj historii rozmowy wyłącznie do uzupełnienia kontekstu (np. zamiany zaimków).
 
 ZASADY:
-1. Nie odpowiadaj na pytanie!
-2. Nie używaj zwrotów grzecznościowych (Cześć, witaj).
+1. Jeśli wejście jest zdaniem twierdzącym, zwróć je bez zmian.
+2. Nie odpowiadaj na wejście użytkownika.
 3. Jeśli pytanie jest już jasne samo w sobie, skopiuj je bez zmian.
-4. Zwróć TYLKO przebudowane zapytanie.
-
-HISTORIA ROZMOWY:
-{chat_history}
-
-NAJNOWSZE PYTANIE:
-{question}
-
-SAMODZIELNE ZAPYTANIE DO BAZY DANYCH:"""
+4. Zwróć TYLKO i wyłącznie przekształcony tekst. Bez żadnych komentarzy.
+"""
 
 DEFAULT_HISTORY_LIMIT = 4
 DEFAULT_MEMORY_ENABLED = True
@@ -57,6 +39,15 @@ def _read_settings() -> dict:
 def _write_settings(data: dict) -> None:
     with open(SETTINGS_FILE, "w", encoding="utf-8") as f:
         json.dump(data, f, ensure_ascii=False, indent=4)
+
+def get_default_settings_data() -> dict:
+    """Zwraca fabryczne ustawienia."""
+    return {
+        "template": DEFAULT_TEMPLATE,
+        "rephrase_template": DEFAULT_REPHRASE_TEMPLATE,
+        "history_limit": DEFAULT_HISTORY_LIMIT,
+        "memory_enabled": DEFAULT_MEMORY_ENABLED
+    }
 
 def get_settings_data() -> dict:
     data = _read_settings()
