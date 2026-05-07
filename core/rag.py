@@ -1,7 +1,7 @@
 import json
 import os
+import hashlib
 from typing import AsyncGenerator, List, Dict
-import asyncio
 
 from langchain_text_splitters import RecursiveCharacterTextSplitter
 from langchain_community.document_loaders import PyPDFLoader, TextLoader
@@ -15,6 +15,7 @@ from core.config import (
     UPLOAD_DIR, CHROMA_DIR, OLLAMA_BASE_URL,
     OLLAMA_API_KEY, MODEL_NAME, EMBEDDING_MODEL
 )
+from core.settings import get_trained_files_list
 
 llm = ChatOpenAI(
     base_url=OLLAMA_BASE_URL,
@@ -31,25 +32,79 @@ vector_store = Chroma(
     persist_directory=CHROMA_DIR
 )
 
-retriever = vector_store.as_retriever(search_kwargs={"k": 3})
+def calculate_file_hash(file_path: str) -> str:
+    """Oblicza hash SHA-256 zawartości pliku."""
+    sha256_hash = hashlib.sha256()
+    with open(file_path, "rb") as f:
+        for byte_block in iter(lambda: f.read(4096), b""):
+            sha256_hash.update(byte_block)
+    return sha256_hash.hexdigest()
+
+def get_cached_filenames() -> List[str]:
+    """
+    Zwraca listę plików w bazie wektorowej, których hash zgadza się
+    z hashem pliku aktualnie znajdującego się na dysku (w Stage).
+    """
+    data = vector_store.get()
+    metadatas = data.get("metadatas", [])
+
+    db_files = {}
+    for m in metadatas:
+        if "filename" in m:
+            fname = m["filename"]
+            if fname not in db_files:
+                db_files[fname] = m.get("file_hash", "")
+
+    valid_cached_files = []
+
+    for fname, stored_hash in db_files.items():
+        file_path = os.path.join(UPLOAD_DIR, fname)
+        if os.path.exists(file_path):
+            current_hash = calculate_file_hash(file_path)
+            if current_hash == stored_hash:
+                valid_cached_files.append(fname)
+
+    return valid_cached_files
 
 def process_and_add_document(filename: str) -> None:
     file_path = os.path.join(UPLOAD_DIR, filename)
+    if not os.path.exists(file_path):
+        raise ValueError(f"Plik {filename} nie istnieje na serwerze.")
 
+    # 1. Obliczamy hash aktualnego pliku na dysku
+    current_hash = calculate_file_hash(file_path)
+
+    # 2. Sprawdzamy czy w bazie są już dane dla tego pliku
+    existing_data = vector_store.get(where={"filename": filename})
+
+    if existing_data and existing_data.get("metadatas"):
+        # Pobieramy hash zapisany w bazie
+        stored_hash = existing_data["metadatas"][0].get("file_hash")
+
+        if stored_hash == current_hash:
+            print(f"--- CACHE HIT: Plik {filename} nie zmienił treści. Pomijam re-processing. ---")
+            return
+        else:
+            print(f"--- CACHE INVALID: Wykryto zmianę w {filename}. Aktualizacja wektorów... ---")
+            delete_document_from_vector_store(filename)
+
+    # 3. Jeśli nie ma w cache lub treść się zmieniła - procesujemy (Trenujemy)
     if filename.lower().endswith(".pdf"):
         loader = PyPDFLoader(file_path)
     elif filename.lower().endswith(".txt"):
         loader = TextLoader(file_path, encoding='utf-8')
     else:
-        os.remove(file_path)
-        raise ValueError("Nieobsługiwany format pliku. Użyj .pdf lub .txt.")
+        raise ValueError("Nieobsługiwany format pliku.")
 
     docs = loader.load()
     text_splitter = RecursiveCharacterTextSplitter(chunk_size=1000, chunk_overlap=200)
     splits = text_splitter.split_documents(docs)
-    vector_store.add_documents(splits)
 
-    os.remove(file_path)
+    for split in splits:
+        split.metadata["filename"] = filename
+        split.metadata["file_hash"] = current_hash
+
+    vector_store.add_documents(splits)
 
 def clear_vector_store() -> None:
     data = vector_store.get()
@@ -61,85 +116,60 @@ def format_docs(docs):
     return "\n\n---\n\n".join(doc.page_content for doc in docs)
 
 def get_history_text(chat_history: List[Dict[str, str]]) -> str:
-    """Konwertuje listę słowników historii na tekst."""
     if not chat_history:
         return ""
     return "\n".join([f"{'UŻYTKOWNIK' if msg['sender'] == 'user' else 'ASYSTENT'}: {msg['text']}" for msg in chat_history])
 
 async def rephrase_question(user_prompt: str, chat_history: List[Dict[str, str]], custom_rephrase: str) -> str:
-    """Tworzy samodzielne pytanie na podstawie historii czatu TYLKO dla bazy wektorowej."""
     if not chat_history:
         return user_prompt
 
     history_text = get_history_text(chat_history)
-
-    rephrase_str = custom_rephrase.strip()
-    rephrase_str += "\n\nHISTORIA ROZMOWY:\n{chat_history}"
-    rephrase_str += "\n\nNAJNOWSZE PYTANIE:\n{question}\n\nSAMODZIELNE ZAPYTANIE DO BAZY DANYCH:"
+    rephrase_str = custom_rephrase.strip() + "\n\nHISTORIA ROZMOWY:\n{chat_history}\n\nNAJNOWSZE PYTANIE:\n{question}\n\nSAMODZIELNE ZAPYTANIE DO BAZY DANYCH:"
 
     prompt = ChatPromptTemplate.from_template(rephrase_str)
     chain = prompt | llm | StrOutputParser()
 
     try:
         standalone_q = await chain.ainvoke({"chat_history": history_text, "question": user_prompt})
-        clean_q = standalone_q.strip().strip('"').strip("'")
-
-        print(f"--- Oryginalne: {user_prompt} ---")
-        print(f"--- Rephrased (do bazy): {clean_q} ---")
-
-        return clean_q
-    except Exception as e:
-        print(f"Błąd re-phrasingu: {e}")
+        return standalone_q.strip().strip('"').strip("'")
+    except Exception:
         return user_prompt
 
 async def generate_chat_response(user_prompt: str, custom_template: str, custom_rephrase: str, chat_history: List[Dict[str, str]]) -> AsyncGenerator[str, None]:
     history_text = get_history_text(chat_history)
     search_query = await rephrase_question(user_prompt, chat_history, custom_rephrase)
-    retrieved_docs = await retriever.ainvoke(search_query)
+
+    active_files = get_trained_files_list()
+
+    if not active_files:
+        retrieved_docs = []
+    else:
+        dynamic_retriever = vector_store.as_retriever(
+            search_kwargs={"k": 3, "filter": {"filename": {"$in": active_files}}}
+        )
+        retrieved_docs = await dynamic_retriever.ainvoke(search_query)
 
     template_str = custom_template.strip()
-
-    if chat_history:
-        template_str += "\n\nHISTORIA ROZMOWY:\n{chat_history}"
-
+    if chat_history: template_str += "\n\nHISTORIA ROZMOWY:\n{chat_history}"
     if retrieved_docs:
         context_text = format_docs(retrieved_docs)
         template_str += "\n\nKONTEKST Z DOKUMENTÓW:\n{context}"
     else:
         context_text = ""
-
     template_str += "\n\nUŻYTKOWNIK:\n{question}\n\nASYSTENT:"
 
     prompt = ChatPromptTemplate.from_template(template_str)
     chain = prompt | llm | StrOutputParser()
 
     try:
-        async for chunk in chain.astream({
-            "context": context_text,
-            "question": user_prompt,
-            "chat_history": history_text
-        }):
-            if chunk:
-                yield json.dumps({"response": chunk}) + "\n"
-    except asyncio.CancelledError:
-        print("Generowanie przerwane przez użytkownika.")
+        async for chunk in chain.astream({"context": context_text, "question": user_prompt, "chat_history": history_text}):
+            if chunk: yield json.dumps({"response": chunk}) + "\n"
     except Exception as e:
-        print(f"Błąd podczas generowania: {e}")
-        yield json.dumps({"response": f"\n[Błąd przetwarzania: {str(e)}]"}) + "\n"
+        yield json.dumps({"response": f"\n[Błąd: {str(e)}]"}) + "\n"
 
 def delete_document_from_vector_store(filename: str) -> None:
-    data = vector_store.get()
+    data = vector_store.get(where={"filename": filename})
     ids = data.get("ids", [])
-    metadatas = data.get("metadatas", [])
-
-    if not ids or not metadatas:
-        return
-
-    ids_to_delete = []
-    for i, metadata in enumerate(metadatas):
-        source = str(metadata.get("source", ""))
-        if source.replace('\\', '/').endswith(filename):
-            ids_to_delete.append(ids[i])
-
-    if ids_to_delete:
-        vector_store.delete(ids=ids_to_delete)
+    if ids:
+        vector_store.delete(ids=ids)

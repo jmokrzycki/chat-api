@@ -7,7 +7,8 @@ from core.config import UPLOAD_DIR
 from core.rag import (
     process_and_add_document,
     clear_vector_store,
-    delete_document_from_vector_store
+    delete_document_from_vector_store,
+    get_cached_filenames
 )
 from core.settings import (
     add_trained_files_to_list,
@@ -51,12 +52,21 @@ async def delete_file(filename: str):
         file_path = os.path.join(UPLOAD_DIR, filename)
         if os.path.exists(file_path):
             os.remove(file_path)
+            delete_document_from_vector_store(filename)
             return {"message": f"Plik {filename} usunięty."}
         raise HTTPException(status_code=404, detail="Plik nie istnieje.")
     except HTTPException:
         raise
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Błąd usuwania pliku: {str(e)}")
+
+@router.get("/cache")
+async def get_cached_files():
+    try:
+        files = get_cached_filenames()
+        return {"files": files}
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Błąd pobierania cache: {str(e)}")
 
 @router.post("/train")
 async def train_rag(data: TrainData):
@@ -68,7 +78,7 @@ async def train_rag(data: TrainData):
 
         add_trained_files_to_list(processed)
 
-        return {"message": f"Pomyślnie przetworzono pliki: {', '.join(processed)}"}
+        return {"message": f"Pomyślnie wczytano pliki: {', '.join(processed)}"}
     except ValueError as ve:
         raise HTTPException(status_code=400, detail=str(ve))
     except Exception as e:
@@ -81,10 +91,8 @@ async def get_trained_files():
 @router.delete("/trained/{filename}")
 async def delete_trained_file(filename: str):
     try:
-        delete_document_from_vector_store(filename)
         remove_trained_file_from_list(filename)
-
-        return {"message": f"Plik {filename} usunięty z bazy wiedzy."}
+        return {"message": f"Plik {filename} usunięty z bazy wiedzy (zapamiętany w cache)."}
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Błąd usuwania z RAG: {str(e)}")
 
@@ -93,6 +101,6 @@ async def reset_rag():
     try:
         clear_vector_store()
         clear_trained_files_list()
-        return {"message": "Baza wiedzy została pomyślnie wyczyszczona."}
+        return {"message": "Baza wiedzy i cache zostały pomyślnie wyczyszczone."}
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Błąd podczas czyszczenia bazy: {str(e)}")
