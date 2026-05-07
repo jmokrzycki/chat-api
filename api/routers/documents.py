@@ -10,7 +10,7 @@ from core.rag import (
     delete_document_from_vector_store,
     get_cached_filenames
 )
-from core.settings import (
+from core.state import (
     add_trained_files_to_list,
     get_trained_files_list,
     clear_trained_files_list,

@@ -65,28 +65,3 @@ def save_settings_data(template: str, rephrase_template: str, history_limit: int
     data["history_limit"] = history_limit
     data["memory_enabled"] = memory_enabled
     _write_settings(data)
-
-def get_trained_files_list() -> list:
-    data = _read_settings()
-    return data.get("trained_files", [])
-
-def add_trained_files_to_list(filenames: list):
-    data = _read_settings()
-    current = set(data.get("trained_files", []))
-    for f in filenames:
-        current.add(f)
-    data["trained_files"] = list(current)
-    _write_settings(data)
-
-def clear_trained_files_list():
-    data = _read_settings()
-    data["trained_files"] = []
-    _write_settings(data)
-
-def remove_trained_file_from_list(filename: str):
-    data = _read_settings()
-    current = data.get("trained_files", [])
-    if filename in current:
-        current.remove(filename)
-        data["trained_files"] = current
-        _write_settings(data)
