@@ -71,14 +71,11 @@ def process_and_add_document(filename: str) -> None:
     if not os.path.exists(file_path):
         raise ValueError(f"Plik {filename} nie istnieje na serwerze.")
 
-    # 1. Obliczamy hash aktualnego pliku na dysku
     current_hash = calculate_file_hash(file_path)
 
-    # 2. Sprawdzamy czy w bazie są już dane dla tego pliku
     existing_data = vector_store.get(where={"filename": filename})
 
     if existing_data and existing_data.get("metadatas"):
-        # Pobieramy hash zapisany w bazie
         stored_hash = existing_data["metadatas"][0].get("file_hash")
 
         if stored_hash == current_hash:
@@ -88,7 +85,6 @@ def process_and_add_document(filename: str) -> None:
             print(f"--- CACHE INVALID: Wykryto zmianę w {filename}. Aktualizacja wektorów... ---")
             delete_document_from_vector_store(filename)
 
-    # 3. Jeśli nie ma w cache lub treść się zmieniła - procesujemy (Trenujemy)
     if filename.lower().endswith(".pdf"):
         loader = PyPDFLoader(file_path)
     elif filename.lower().endswith(".txt"):

@@ -32,7 +32,10 @@ async def upload_file_only(file: UploadFile = File(...)):
             while content := await file.read(1024 * 1024):
                 buffer.write(content)
 
-        return {"message": f"Plik {filename} został przesłany na Stage.", "filename": filename}
+        if filename in get_trained_files_list():
+            remove_trained_file_from_list(filename)
+
+        return {"message": f"Plik {filename} został przesłany i czeka na Stage.", "filename": filename}
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Błąd przesyłania: {str(e)}")
 
